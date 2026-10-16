@@ -552,6 +552,7 @@ const ENGINE_TYPES = {
     distributed: { name: 'Distributed' },
     mview:       { name: 'MaterializedView' },
     dictionary:  { name: 'Dictionary' },
+    view:        { name: 'View' },
 };
 
 function classifyEngine(engineName) {
@@ -559,6 +560,7 @@ function classifyEngine(engineName) {
     const e = engineName;
     if (e === 'Distributed') return 'distributed';
     if (e === 'MaterializedView') return 'mview';
+    if (e === 'View') return 'view';
     if (e.startsWith('Dictionary')) return 'dictionary';
     if (e.startsWith('Replicated')) return 'replicated';
     return 'mergetree';
@@ -1358,7 +1360,7 @@ function exportHtml() {
 
     const wrapStyles = `
 :root { --accent:#3b5bdb; --border:#e8e8ea; --bg:#fafafa; --text:#0b0d12; --muted:#6b7280; --faint:#9aa0aa;
-  --t-mergetree-fg:#1f6feb; --t-replicated-fg:#d97706; --t-distributed-fg:#0d9488; --t-mview-fg:#a855f7; --t-dictionary-fg:#b48a00;
+  --t-mergetree-fg:#1f6feb; --t-replicated-fg:#d97706; --t-distributed-fg:#0d9488; --t-mview-fg:#a855f7; --t-dictionary-fg:#b48a00; --t-view-fg:#c2410c;
   --grafana-fg:#f46800;
   --v-used-fg:#0f7b4f; --v-unused-fg:#b3261e; --v-unknown-fg:#8a6d0b; --v-nocoverage-fg:#9aa0aa; }
 *, *::before, *::after { box-sizing: border-box; }
@@ -1416,6 +1418,7 @@ function commonDiagramCss() {
 .df-node.engine-distributed .df-rail, .rel-table.engine-distributed .rel-rail { fill:var(--t-distributed-fg); }
 .df-node.engine-mview .df-rail, .rel-table.engine-mview .rel-rail { fill:var(--t-mview-fg); }
 .df-node.engine-dictionary .df-rail, .rel-table.engine-dictionary .rel-rail { fill:var(--t-dictionary-fg); }
+.df-node.engine-view .df-rail, .rel-table.engine-view .rel-rail { fill:var(--t-view-fg); }
 .df-node.current .df-rail, .rel-table.current .rel-rail { fill:var(--accent); }
 .df-title { font: 600 11.5px 'JetBrains Mono', monospace; fill:var(--text); }
 .df-sub   { font: 400 9.5px 'JetBrains Mono', monospace; fill:var(--faint); }
@@ -1424,6 +1427,7 @@ function commonDiagramCss() {
 .df-pin-text { font: 700 9px 'JetBrains Mono', monospace; fill:#fff; }
 .df-edge { fill:none; stroke:#cbd0d8; stroke-width:1; }
 .df-edge.active { stroke:var(--accent); stroke-width:1.4; }
+.df-edge.lookup { stroke-dasharray:4 3; }
 .rel-role { font: 400 9.5px 'JetBrains Mono', monospace; fill:var(--faint); }
 .rel-name { font: 700 12px 'JetBrains Mono', monospace; fill:var(--text); }
 .rel-engine { font: 400 9.5px 'JetBrains Mono', monospace; fill:var(--muted); }
@@ -1555,6 +1559,7 @@ function matchEngineKey(qLower) {
         distributed: ['distributed'],
         mview:       ['materializedview', 'materialized view', 'mview', 'mv'],
         dictionary:  ['dictionary', 'dict'],
+        view:        ['view'],
     };
     for (const [key, names] of Object.entries(aliases)) {
         if (names.some((n) => n === qLower)) return key;
@@ -1784,6 +1789,7 @@ function glyphFor(engineKey) {
         distributed: '⋈',
         mview:       '◐',
         dictionary:  '☱',
+        view:        '◇',
     })[engineKey] || '▤';
 }
 

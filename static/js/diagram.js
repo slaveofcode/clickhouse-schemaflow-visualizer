@@ -211,7 +211,10 @@
         }, tbName);
         g.appendChild(title);
 
-        const subParts = [dbName, engineName].filter(Boolean).join(' · ');
+        // A refreshable view has no trigger table, so its schedule is the only
+        // thing that says when data moves through it.
+        const refresh = node.refresh ? `↻ ${node.refresh.toLowerCase()}` : '';
+        const subParts = [dbName, engineName, refresh].filter(Boolean).join(' · ');
         if (subParts) {
             g.appendChild(el('text', {
                 class: 'df-sub',
@@ -279,7 +282,7 @@
             dg.setNode(n.id, { width: w, height: h });
         }
         for (const e of graph.edges) {
-            dg.setEdge(e.from, e.to, { label: e.label });
+            dg.setEdge(e.from, e.to, { label: e.label, kind: e.kind });
         }
 
         dagre.layout(dg);
@@ -307,11 +310,16 @@
             const fromNode = graph.nodes.find((n) => n.id === e.v);
             const toNode = graph.nodes.find((n) => n.id === e.w);
             const active = (fromNode && fromNode.current) || (toNode && toNode.current);
+            const lookup = edge.kind === 'lookup';
             const path = el('path', {
-                class: 'df-edge' + (active ? ' active' : ''),
+                class: 'df-edge' + (active ? ' active' : '') + (lookup ? ' lookup' : ''),
                 d: buildEdgePath(edge.points),
                 'marker-end': `url(#${active ? 'df-arrow-active' : 'df-arrow'})`,
             });
+            if (lookup) {
+                path.appendChild(el('title', null,
+                    `${e.w} reads ${e.v} by JOIN or dictGet; inserts into ${e.v} do not trigger it`));
+            }
             edgesG.appendChild(path);
         }
 

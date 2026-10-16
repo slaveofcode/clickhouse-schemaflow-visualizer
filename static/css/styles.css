@@ -27,6 +27,8 @@
   --t-mview-bg:       #f5ecfd;
   --t-dictionary-fg:  #b48a00;
   --t-dictionary-bg:  #fbf3d6;
+  --t-view-fg:        #c2410c;
+  --t-view-bg:        #fdebe1;
 
   /* Column-usage verdicts. Only "unused" means safe to drop, so it is the one
      that reads as an action; the other three are deliberately quieter. */
@@ -409,6 +411,7 @@ main { overflow: hidden; }
 .fa-diagram-project { color: var(--t-distributed-fg) !important; }
 .fa-eye          { color: var(--t-mview-fg) !important; }
 .fa-book         { color: var(--t-dictionary-fg) !important; }
+.fa-glasses      { color: var(--t-view-fg) !important; }
 
 /* ─── Legend ─────────────────────────────────────────────────────────────── */
 .legend-container {
@@ -468,6 +471,24 @@ main { overflow: hidden; }
 .table-types-legend li .glyph.distributed { background: var(--t-distributed-bg); color: var(--t-distributed-fg); }
 .table-types-legend li .glyph.mview       { background: var(--t-mview-bg);       color: var(--t-mview-fg); }
 .table-types-legend li .glyph.dictionary  { background: var(--t-dictionary-bg);  color: var(--t-dictionary-fg); }
+.table-types-legend li .glyph.view        { background: var(--t-view-bg);        color: var(--t-view-fg); }
+
+.edge-types-legend {
+  list-style: none;
+  display: grid;
+  gap: 3px;
+  margin-top: 6px;
+}
+.edge-types-legend li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text-strong);
+}
+.legend-edge { stroke: var(--text-muted); stroke-width: 1.4; }
+.legend-edge.lookup { stroke-dasharray: 4 3; }
+.collapsible-header.collapsed ~ .edge-types-legend { display: none; }
 
 .collapsible-header.collapsed ~ .table-types-legend,
 .legend-container .collapsible-header.collapsed ~ .table-types-legend {
@@ -578,6 +599,7 @@ main { overflow: hidden; }
 #current-selection .crumb-chip.distributed { background: var(--t-distributed-bg); color: var(--t-distributed-fg); }
 #current-selection .crumb-chip.mview       { background: var(--t-mview-bg);       color: var(--t-mview-fg); }
 #current-selection .crumb-chip.dictionary  { background: var(--t-dictionary-bg);  color: var(--t-dictionary-fg); }
+#current-selection .crumb-chip.view        { background: var(--t-view-bg);        color: var(--t-view-fg); }
 
 .export-buttons { display: flex; gap: 6px; flex-shrink: 0; }
 .export-buttons button {
@@ -783,6 +805,7 @@ main { overflow: hidden; }
 .df-node.engine-distributed .df-rail { fill: var(--t-distributed-fg); }
 .df-node.engine-mview       .df-rail { fill: var(--t-mview-fg); }
 .df-node.engine-dictionary  .df-rail { fill: var(--t-dictionary-fg); }
+.df-node.engine-view        .df-rail { fill: var(--t-view-fg); }
 .df-node.current .df-rail { fill: var(--accent); }
 
 .df-title {
@@ -820,6 +843,8 @@ main { overflow: hidden; }
   stroke: var(--accent);
   stroke-width: 1.4;
 }
+/* A table a view reads without being triggered by it. */
+.df-edge.lookup { stroke-dasharray: 4 3; }
 
 /* Relationships — table cards with column rows */
 .rel-card {
@@ -844,6 +869,7 @@ main { overflow: hidden; }
 .rel-table.engine-distributed .rel-rail { fill: var(--t-distributed-fg); }
 .rel-table.engine-mview       .rel-rail { fill: var(--t-mview-fg); }
 .rel-table.engine-dictionary  .rel-rail { fill: var(--t-dictionary-fg); }
+.rel-table.engine-view        .rel-rail { fill: var(--t-view-fg); }
 .rel-table.current .rel-rail { fill: var(--accent); }
 
 .rel-role {
@@ -1247,6 +1273,7 @@ main { overflow: hidden; }
 .table-info-value.engine-chip.distributed { background: var(--t-distributed-bg); color: var(--t-distributed-fg); }
 .table-info-value.engine-chip.mview       { background: var(--t-mview-bg);       color: var(--t-mview-fg); }
 .table-info-value.engine-chip.dictionary  { background: var(--t-dictionary-bg);  color: var(--t-dictionary-fg); }
+.table-info-value.engine-chip.view        { background: var(--t-view-bg);        color: var(--t-view-fg); }
 .table-info-value.numeric { font-variant-numeric: tabular-nums; }
 .table-info-value.code {
   background: var(--bg);
@@ -1475,6 +1502,7 @@ footer {
 .palette-row[data-kind="table"]  .row-glyph.engine-distributed { background: var(--t-distributed-bg); color: var(--t-distributed-fg); }
 .palette-row[data-kind="table"]  .row-glyph.engine-mview       { background: var(--t-mview-bg);       color: var(--t-mview-fg); }
 .palette-row[data-kind="table"]  .row-glyph.engine-dictionary  { background: var(--t-dictionary-bg);  color: var(--t-dictionary-fg); }
+.palette-row[data-kind="table"]  .row-glyph.engine-view        { background: var(--t-view-bg);        color: var(--t-view-fg); }
 .palette-row[data-kind="column"] .row-glyph { background: var(--accent-bg); color: var(--accent-fg); }
 .palette-row[data-kind="engine"] .row-glyph { background: var(--border-soft); color: var(--text-muted); }
 
@@ -1867,6 +1895,7 @@ ul.usage-panels > li { padding: 2px 0; }
 .sql-viewer .crumb-chip.distributed { background: var(--t-distributed-bg); color: var(--t-distributed-fg); }
 .sql-viewer .crumb-chip.mview       { background: var(--t-mview-bg);       color: var(--t-mview-fg); }
 .sql-viewer .crumb-chip.dictionary  { background: var(--t-dictionary-bg);  color: var(--t-dictionary-fg); }
+.sql-viewer .crumb-chip.view        { background: var(--t-view-bg);        color: var(--t-view-fg); }
 .sql-viewer-meta {
   display: grid;
   grid-template-columns: max-content 1fr;
