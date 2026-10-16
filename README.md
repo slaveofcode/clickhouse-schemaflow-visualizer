@@ -86,7 +86,7 @@ An open-source web application for visualizing ClickHouse table relationships. I
    docker-compose up -d
    ```
 
-3. Access the web interface at http://localhost:8080
+3. Access the web interface at http://localhost:8023 (set `HOST_PORT` to use another port)
 
 ### Manual Setup
 
