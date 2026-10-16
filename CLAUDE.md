@@ -43,7 +43,7 @@ docker-compose up -d
   - `GET /columns` — flat column index across all visible tables (used by the `Ctrl+K` / `⌘K` command palette)
   - `GET /dataflow/:database/:table` — table-level DAG (upstream sources + downstream materializations) for the selected table
   - `GET /relationships/:database/:table` — column-level DAG with transformation expressions on the edges
-  - `GET /table/:database/:table` — column details for a single table (used by the inspector panel)
+  - `GET /table/:database/:table` — column details plus the table's DDL (`create_query`, pretty-printed via `formatQueryOrNull` when the server has it; `redactSecrets` masks quoted passwords). Used by the inspector and by the DDL dialog every diagram card's `SQL` button opens
 
   Plus four routes for the optional Grafana column-usage feature (see below):
   - `GET /grafana/status` — is dashboard usage available, and if not why
@@ -89,6 +89,7 @@ The one component that *does* invalidate is `models.GrafanaIndex` (`models/grafa
 
 - `static/html/index.html` is served through `html/template` (not `router.Static`) so asset URLs carry `?v={{.BuildID}}`, a per-process cache-buster. **Any new CSS/JS tag must include `?v={{.BuildID}}`** or it will be cached across upgrades. Everything under `/static` is served with `Cache-Control: no-cache`.
 - `diagram.js` exposes `window.SchemaDiagram.renderDataFlow(container, graph, {onNodeClick})`, `.renderRelationships(container, graph, {onTableClick})` and `.renderDashboardUsage(container, usage, {engineType, hideUnconnected, onOpen})`; `app.js` owns sidebar, palette, inspector, and Export HTML.
+- **The DDL dialog never selects the table.** `onShowSql` (passed to both renderers) opens `#sql-viewer` and leaves the diagram alone — selecting redraws the graph around the new table, the opposite of what someone checking a pipeline wants. The DDL is rendered by `highlightSql()` as text nodes and spans, never `innerHTML`; `tableDetailsCache` holds each table's details for the page's life. Export HTML strips the `.sql-btn` chips from the clone.
 - Export HTML inlines `commonDiagramCss()` from `app.js`, so diagram styling lives in two places — update both when changing node/edge appearance. An SVG `rect` with no `fill` paints **black**, so every transparent hit-target rule has to be in both copies; leaving `.rel-col-hit` out of the export copy turned every column row of an exported diagram into a black bar.
 
 ### Grafana column usage (optional)

@@ -9,6 +9,22 @@ tags matching `v*` (`.github/workflows/release.yml`, `.github/workflows/docker-p
 
 ## [Unreleased]
 
+### Added
+
+- **The full DDL of every table on the diagram.** Each card in the Data Flow and
+  Relationships views carries a `SQL` button that opens the table's `CREATE` statement in a
+  dialog — columns with their `DEFAULT`/`MATERIALIZED`/`ALIAS` expressions and codecs,
+  engine, partition/order/primary keys, TTL, settings, and a view's `TO` target and
+  `SELECT` — without selecting the table, so the diagram being checked stays on screen.
+  Clicking an expression label on a Relationships edge opens the view it belongs to with
+  that expression highlighted. The inspector gains a DDL section and shows each column's
+  default expression, codec and comment.
+- `GET /api/table/:database/:table` also returns `create_query` (pretty-printed by the
+  server's `formatQueryOrNull` where it exists, as stored otherwise), `create_formatted`,
+  `engine_full`, `as_select`, the table `comment`, and per-column `default_kind`,
+  `default_expression` and `compression_codec`. Quoted passwords in the DDL are replaced
+  with `'[HIDDEN]'` before it leaves the server.
+
 ## [2.3.1] - 2026-09-24
 
 ### Fixed

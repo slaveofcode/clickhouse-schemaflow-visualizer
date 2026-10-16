@@ -689,6 +689,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     setupSidebarFilter();
     setupCommandPalette();
+    setupSqlViewer();
 });
 
 function relationshipsZoomResetIfAny() {
@@ -923,6 +924,7 @@ function renderDataFlow() {
     if (!window.SchemaDiagram) return;
     const result = window.SchemaDiagram.renderDataFlow(dataflowDiagram, currentDataFlowGraph, {
         onNodeClick: (id) => selectTableByID(id),
+        onShowSql: openSqlViewer,
     });
     dataflowPanzoom = result ? result.panzoom : null;
 }
@@ -931,6 +933,7 @@ function renderRelationships() {
     if (!window.SchemaDiagram) return;
     const result = window.SchemaDiagram.renderRelationships(relationshipsDiagram, currentRelationshipsGraph, {
         onTableClick: (id) => selectTableByID(id),
+        onShowSql: openSqlViewer,
     });
     relationshipsPanzoom = result ? result.panzoom : null;
 }
@@ -961,6 +964,7 @@ async function loadTableDetails(database, table) {
         const response = await fetch(`/api/table/${database}/${table}`);
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const details = await response.json();
+        tableDetailsCache.set(`${details.database}.${details.name}`, details);
         currentUsage = await loadTableUsage(database, table);
         renderTableDetails(details, currentUsage);
         renderDashboardUsage();
@@ -1022,15 +1026,56 @@ function renderTableDetails(details, usage) {
                             <td class="col-content">
                                 <span class="column-name" title="${escapeHtml(column.name)}">${escapeHtml(column.name)}</span>
                                 <span class="column-type" title="${escapeHtml(column.type)}">${escapeHtml(column.type)}</span>
+                                ${columnExtra(column)}
                             </td>
                         </tr>
                     `).join('')}
                 </tbody>
             </table>
         </div>
+
+        ${details.create_query ? `
+        <div class="ddl-section">
+            <h4>ddl
+                <span class="ddl-actions">
+                    <button type="button" class="sql-viewer-btn" data-ddl-copy>Copy</button>
+                    <button type="button" class="sql-viewer-btn" data-ddl-expand>Expand</button>
+                </span>
+            </h4>
+            <pre class="sql-code"><code data-ddl-code></code></pre>
+        </div>
+        ` : ''}
     `;
     tableDetailsContent.innerHTML = html;
     decorateColumnsWithUsage(cols, usage);
+
+    // The DDL goes in through text nodes, never innerHTML: it is schema text,
+    // and a column comment or string default can hold anything.
+    const code = tableDetailsContent.querySelector('[data-ddl-code]');
+    if (code) {
+        code.appendChild(highlightSql(details.create_query));
+        const id = `${details.database}.${details.name}`;
+        tableDetailsContent.querySelector('[data-ddl-copy]').addEventListener('click', (ev) => {
+            copyText(details.create_query, ev.currentTarget);
+        });
+        tableDetailsContent.querySelector('[data-ddl-expand]').addEventListener('click', () => {
+            openSqlViewer(id);
+        });
+    }
+}
+
+// columnExtra shows what the type alone does not: how the column is filled
+// (DEFAULT / MATERIALIZED / ALIAS / EPHEMERAL), its codec and its comment.
+function columnExtra(column) {
+    const parts = [];
+    if (column.default_kind) {
+        const expr = column.default_expression ? ` ${escapeHtml(column.default_expression)}` : '';
+        parts.push(`<span class="kw">${escapeHtml(column.default_kind)}</span>${expr}`);
+    }
+    if (column.compression_codec) parts.push(escapeHtml(column.compression_codec));
+    let html = parts.length ? `<span class="column-extra">${parts.join(' · ')}</span>` : '';
+    if (column.comment) html += `<span class="column-comment">${escapeHtml(column.comment)}</span>`;
+    return html;
 }
 
 // usageSummary is a compact count beside the columns heading.
@@ -1308,6 +1353,8 @@ function exportHtml() {
     // The viewport's transform was used for pan/zoom. Reset for the export.
     const viewport = clone.querySelector('.viewport');
     if (viewport) viewport.removeAttribute('transform');
+    // The SQL chips open a dialog the exported page does not have.
+    clone.querySelectorAll('.sql-btn').forEach((node) => node.remove());
 
     const wrapStyles = `
 :root { --accent:#3b5bdb; --border:#e8e8ea; --bg:#fafafa; --text:#0b0d12; --muted:#6b7280; --faint:#9aa0aa;
@@ -1816,4 +1863,220 @@ function commitPaletteSelection() {
             sidebarFilterInput.focus();
         }
     }
+}
+
+// ─── DDL viewer ──────────────────────────────────────────────────────────
+// Any card in either diagram can show its table's DDL without selecting it:
+// selecting redraws the diagram around the new table, which is the opposite
+// of what someone checking a pipeline wants. Details are cached per table for
+// the life of the page, matching the backend's own schema cache.
+const tableDetailsCache = new Map();
+let sqlViewerRequest = 0;
+let sqlViewerTableID = null;
+let sqlViewerReturnFocus = null;
+
+function setupSqlViewer() {
+    const viewer = document.getElementById('sql-viewer');
+    if (!viewer) return;
+    viewer.addEventListener('click', (e) => {
+        if (e.target.closest('[data-sql-close]')) closeSqlViewer();
+    });
+    document.getElementById('sql-viewer-copy').addEventListener('click', (ev) => {
+        const details = tableDetailsCache.get(sqlViewerTableID);
+        if (details) copyText(details.create_query || '', ev.currentTarget);
+    });
+    document.getElementById('sql-viewer-open').addEventListener('click', () => {
+        const id = sqlViewerTableID;
+        closeSqlViewer();
+        selectTableByID(id);
+    });
+    // Capture phase, so Escape closes the dialog before the relationships
+    // view treats it as "clear the focused column" as well.
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && !viewer.hidden) {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            closeSqlViewer();
+        }
+    }, true);
+}
+
+async function fetchTableDetails(id) {
+    if (tableDetailsCache.has(id)) return tableDetailsCache.get(id);
+    const dot = id.indexOf('.');
+    const database = id.slice(0, dot);
+    const table = id.slice(dot + 1);
+    const response = await fetch(`/api/table/${encodeURIComponent(database)}/${encodeURIComponent(table)}`);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const details = await response.json();
+    tableDetailsCache.set(id, details);
+    return details;
+}
+
+async function openSqlViewer(id, opts) {
+    const viewer = document.getElementById('sql-viewer');
+    if (!viewer || !id) return;
+    const highlight = opts && opts.highlight;
+    const request = ++sqlViewerRequest;
+    sqlViewerTableID = id;
+
+    const title = document.getElementById('sql-viewer-title');
+    const engine = document.getElementById('sql-viewer-engine');
+    const meta = document.getElementById('sql-viewer-meta');
+    const code = document.getElementById('sql-viewer-code');
+    title.textContent = id;
+    engine.textContent = '';
+    engine.className = 'crumb-chip';
+    meta.replaceChildren();
+    code.replaceChildren(document.createTextNode('Loading…'));
+
+    if (viewer.hidden) sqlViewerReturnFocus = document.activeElement;
+    viewer.hidden = false;
+    viewer.setAttribute('aria-hidden', 'false');
+    viewer.querySelector('.sql-viewer-actions [data-sql-close]').focus();
+
+    let details;
+    try {
+        details = await fetchTableDetails(id);
+    } catch (error) {
+        console.error('Error loading DDL:', error);
+        if (request === sqlViewerRequest) code.textContent = 'Failed to load the DDL for this table.';
+        return;
+    }
+    if (request !== sqlViewerRequest) return;
+
+    engine.textContent = details.engine || '';
+    engine.classList.add(classifyEngine(details.engine));
+
+    const rows = [
+        ['engine', details.engine_full || details.engine],
+        ['partition by', details.partition_key],
+        ['order by', details.sorting_key],
+        ['primary key', details.primary_key],
+        ['comment', details.comment],
+        ['rows', details.total_rows != null ? formatRows(details.total_rows) : null],
+        ['size', details.total_bytes ? formatBytes(details.total_bytes) : null],
+    ];
+    for (const [label, value] of rows) {
+        if (!value) continue;
+        const dt = document.createElement('dt');
+        dt.textContent = label;
+        const dd = document.createElement('dd');
+        dd.textContent = value;
+        meta.append(dt, dd);
+    }
+
+    code.replaceChildren(highlightSql(details.create_query || '-- no DDL stored for this table', highlight));
+    const mark = code.querySelector('mark');
+    if (mark) mark.scrollIntoView({ block: 'center' });
+    else code.parentElement.scrollTop = 0;
+}
+
+function closeSqlViewer() {
+    const viewer = document.getElementById('sql-viewer');
+    if (!viewer || viewer.hidden) return;
+    sqlViewerRequest++;
+    viewer.hidden = true;
+    viewer.setAttribute('aria-hidden', 'true');
+    if (sqlViewerReturnFocus && document.contains(sqlViewerReturnFocus)) sqlViewerReturnFocus.focus();
+    sqlViewerReturnFocus = null;
+}
+
+async function copyText(text, button) {
+    try {
+        await navigator.clipboard.writeText(text);
+    } catch (_) {
+        // Clipboard API is unavailable on plain http other than localhost.
+        const area = document.createElement('textarea');
+        area.value = text;
+        area.style.position = 'fixed';
+        area.style.opacity = '0';
+        document.body.appendChild(area);
+        area.select();
+        document.execCommand('copy');
+        area.remove();
+    }
+    if (button) {
+        const label = button.textContent;
+        button.textContent = 'Copied';
+        setTimeout(() => { button.textContent = label; }, 1200);
+    }
+}
+
+const SQL_KEYWORDS = new Set((
+    'ADD AFTER ALIAS ALL AND ANTI ANY ARRAY AS ASC ASOF BETWEEN BY CASE CAST CODEC COLLATE COMMENT CREATE CROSS ' +
+    'DATABASE DEFAULT DELETE DESC DICTIONARY DISTINCT ELSE EMPTY END ENGINE EPHEMERAL EXISTS FINAL FORMAT FROM ' +
+    'FULL GLOBAL GRANULARITY GROUP HAVING IF ILIKE IN INDEX INNER INSERT INTERVAL INTO IS JOIN KEY LAYOUT LEFT ' +
+    'LIFETIME LIKE LIMIT LIVE MATERIALIZED NOT NULL OFFSET ON OR ORDER OUTER PARTITION POPULATE PREWHERE ' +
+    'PRIMARY PROJECTION RANGE REFRESH RIGHT SAMPLE SECOND SELECT SEMI SETTINGS SOURCE TABLE THEN TO TOTALS TTL ' +
+    'TYPE UNION USING VIEW WHEN WHERE WITH'
+).split(' '));
+
+const SQL_TOKEN = /(--[^\n]*)|('(?:[^'\\]|\\.)*')|(`(?:[^`\\]|\\.)*`)|(\b\d+(?:\.\d+)?\b)|([A-Za-z_][A-Za-z0-9_]*)/g;
+
+// findHighlight locates an expression in the DDL. The expression comes from
+// the stored one-line SELECT and the DDL may be pretty-printed, so any run of
+// whitespace matches any other.
+function findHighlight(text, needle) {
+    if (!needle) return null;
+    const pattern = needle.trim().split(/\s+/)
+        .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+        .join('\\s+');
+    if (!pattern) return null;
+    const match = new RegExp(pattern).exec(text);
+    return match ? [match.index, match.index + match[0].length] : null;
+}
+
+// highlightSql builds the DDL as a DocumentFragment of text nodes and spans —
+// keywords (upper case only, so a column called `key` stays plain), strings,
+// backticked identifiers, numbers and comments — with an optional <mark>
+// around the expression a diagram label pointed at.
+function highlightSql(text, highlight) {
+    const frag = document.createDocumentFragment();
+    const range = findHighlight(text, highlight);
+
+    const emit = (start, end, className) => {
+        // Split the token where it crosses the highlighted range.
+        const cuts = [start, end];
+        if (range) {
+            if (range[0] > start && range[0] < end) cuts.push(range[0]);
+            if (range[1] > start && range[1] < end) cuts.push(range[1]);
+        }
+        cuts.sort((a, b) => a - b);
+        for (let i = 0; i < cuts.length - 1; i++) {
+            const a = cuts[i];
+            const b = cuts[i + 1];
+            if (a === b) continue;
+            let node = document.createTextNode(text.slice(a, b));
+            if (className) {
+                const span = document.createElement('span');
+                span.className = className;
+                span.appendChild(node);
+                node = span;
+            }
+            if (range && a >= range[0] && b <= range[1]) {
+                const mark = document.createElement('mark');
+                mark.appendChild(node);
+                node = mark;
+            }
+            frag.appendChild(node);
+        }
+    };
+
+    let last = 0;
+    SQL_TOKEN.lastIndex = 0;
+    let m;
+    while ((m = SQL_TOKEN.exec(text)) !== null) {
+        if (m.index > last) emit(last, m.index, null);
+        let className = null;
+        if (m[1]) className = 'tok-com';
+        else if (m[2]) className = 'tok-str';
+        else if (m[3]) className = 'tok-id';
+        else if (m[4]) className = 'tok-num';
+        else if (m[5] && m[5] === m[5].toUpperCase() && SQL_KEYWORDS.has(m[5])) className = 'tok-kw';
+        emit(m.index, m.index + m[0].length, className);
+        last = m.index + m[0].length;
+    }
+    if (last < text.length) emit(last, text.length, null);
+    return frag;
 }

@@ -8,7 +8,9 @@ import (
 	"html"
 	"log"
 	"os"
+	"regexp"
 	"strings"
+	"sync/atomic"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 )
@@ -55,18 +57,30 @@ type ColumnInfo struct {
 	Type     string `json:"type"`
 	Position uint64 `json:"position"`
 	Comment  string `json:"comment"`
+	// DefaultKind is DEFAULT, MATERIALIZED, ALIAS or EPHEMERAL; empty for a
+	// plain column.
+	DefaultKind       string `json:"default_kind,omitempty"`
+	DefaultExpression string `json:"default_expression,omitempty"`
+	CompressionCodec  string `json:"compression_codec,omitempty"`
 }
 
 type TableDetails struct {
 	Name         string       `json:"name"`
 	Database     string       `json:"database"`
 	Engine       string       `json:"engine"`
+	EngineFull   string       `json:"engine_full,omitempty"`
 	PrimaryKey   string       `json:"primary_key"`
 	SortingKey   string       `json:"sorting_key"`
 	PartitionKey string       `json:"partition_key"`
+	Comment      string       `json:"comment,omitempty"`
 	TotalRows    *uint64      `json:"total_rows"`
 	TotalBytes   *uint64      `json:"total_bytes"`
 	Columns      []ColumnInfo `json:"columns"`
+	// CreateQuery is the table's DDL, pretty-printed when the server has
+	// formatQueryOrNull and as stored otherwise. AsSelect is a view's SELECT.
+	CreateQuery     string `json:"create_query"`
+	CreateFormatted bool   `json:"create_formatted"`
+	AsSelect        string `json:"as_select,omitempty"`
 }
 
 // ColumnRelationship represents a column-to-column mapping
@@ -518,24 +532,31 @@ func (c *ClickHouseClient) GetTableColumns(database, table string) (*TableDetail
 
 	// First get basic table info
 	tableQuery := `
-		SELECT engine, total_rows, total_bytes, primary_key, sorting_key, partition_key
+		SELECT engine, engine_full, total_rows, total_bytes, primary_key, sorting_key, partition_key,
+		       comment, create_table_query, as_select
 		FROM system.tables
 		WHERE database = ? AND name = ?
 	`
 
-	var engine, primaryKey, sortingKey, partitionKey string
+	var engine, engineFull, primaryKey, sortingKey, partitionKey, comment, createQuery, asSelect string
 	var totalRows, totalBytes *uint64
 
 	row := c.conn.QueryRow(ctx, tableQuery, database, table)
-	if err := row.Scan(&engine, &totalRows, &totalBytes, &primaryKey, &sortingKey, &partitionKey); err != nil {
+	if err := row.Scan(&engine, &engineFull, &totalRows, &totalBytes, &primaryKey, &sortingKey, &partitionKey,
+		&comment, &createQuery, &asSelect); err != nil {
 		return nil, fmt.Errorf("failed to get table info: %v", err)
+	}
+
+	formatted, ok := c.formatCreateQuery(ctx, database, table)
+	if ok {
+		createQuery = formatted
 	}
 
 	// Get column information
 	columnsQuery := `
-		SELECT name, type, position, comment
-		FROM system.columns 
-		WHERE database = ? AND table = ? 
+		SELECT name, type, position, comment, default_kind, default_expression, compression_codec
+		FROM system.columns
+		WHERE database = ? AND table = ?
 		ORDER BY position
 	`
 
@@ -548,7 +569,8 @@ func (c *ClickHouseClient) GetTableColumns(database, table string) (*TableDetail
 	var columns []ColumnInfo
 	for rows.Next() {
 		var col ColumnInfo
-		if err := rows.Scan(&col.Name, &col.Type, &col.Position, &col.Comment); err != nil {
+		if err := rows.Scan(&col.Name, &col.Type, &col.Position, &col.Comment,
+			&col.DefaultKind, &col.DefaultExpression, &col.CompressionCodec); err != nil {
 			return nil, fmt.Errorf("failed to scan column: %v", err)
 		}
 		columns = append(columns, col)
@@ -559,16 +581,63 @@ func (c *ClickHouseClient) GetTableColumns(database, table string) (*TableDetail
 	}
 
 	return &TableDetails{
-		Name:         table,
-		Database:     database,
-		Engine:       engine,
-		PrimaryKey:   primaryKey,
-		SortingKey:   sortingKey,
-		PartitionKey: partitionKey,
-		TotalRows:    totalRows,
-		TotalBytes:   totalBytes,
-		Columns:      columns,
+		Name:            table,
+		Database:        database,
+		Engine:          engine,
+		EngineFull:      redactSecrets(engineFull),
+		PrimaryKey:      primaryKey,
+		SortingKey:      sortingKey,
+		PartitionKey:    partitionKey,
+		Comment:         comment,
+		TotalRows:       totalRows,
+		TotalBytes:      totalBytes,
+		Columns:         columns,
+		CreateQuery:     redactSecrets(createQuery),
+		CreateFormatted: ok,
+		AsSelect:        redactSecrets(asSelect),
 	}, nil
+}
+
+// formatUnsupported is set once the server has refused formatQueryOrNull, so a
+// ClickHouse older than the function is asked once rather than on every click.
+var formatUnsupported atomic.Bool
+
+// formatCreateQuery pretty-prints a table's DDL on the server. system.tables
+// stores it on one line, which for a materialized view puts the whole SELECT
+// on that line too. It is a separate query so that a server without the
+// function costs the formatting and nothing else.
+func (c *ClickHouseClient) formatCreateQuery(ctx context.Context, database, table string) (string, bool) {
+	if formatUnsupported.Load() {
+		return "", false
+	}
+	var formatted *string
+	row := c.conn.QueryRow(ctx,
+		"SELECT formatQueryOrNull(create_table_query) FROM system.tables WHERE database = ? AND name = ?",
+		database, table)
+	if err := row.Scan(&formatted); err != nil {
+		if strings.Contains(err.Error(), "UNKNOWN_FUNCTION") || strings.Contains(err.Error(), "Unknown function") {
+			formatUnsupported.Store(true)
+		}
+		log.Printf("formatting the DDL of %s.%s: %v", database, table, err)
+		return "", false
+	}
+	if formatted == nil || *formatted == "" {
+		return "", false
+	}
+	return *formatted, true
+}
+
+// secretPattern matches a quoted password: dictionary sources write
+// PASSWORD 'x', named collections and settings write password = 'x'.
+var secretPattern = regexp.MustCompile(`(?i)(\bpassword\b\s*=?\s*)'(?:[^'\\]|\\.)*'`)
+
+// redactSecrets hides quoted passwords in DDL. ClickHouse masks them itself in
+// system.tables unless display_secrets_in_show_and_select is on, but older
+// servers do not, and the API is unauthenticated. Credentials passed to an
+// engine as plain positional arguments (MySQL('host', 'db', 'tbl', 'user',
+// 'pass')) carry no keyword and cannot be found this way.
+func redactSecrets(ddl string) string {
+	return secretPattern.ReplaceAllString(ddl, "${1}'[HIDDEN]'")
 }
 
 // parseViewQuery extracts the SELECT statement from a CREATE MATERIALIZED VIEW query
